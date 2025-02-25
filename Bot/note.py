@@ -76,12 +76,19 @@ def generate_calendar(year, month, user_id):
 
     keyboard.append([
         InlineKeyboardButton("⬅️ Назад", callback_data=f"change_month_{prev_year}_{prev_month}"),
-        InlineKeyboardButton("➡️ Вперед", callback_data=f"change_month_{next_year}_{next_month}")
+        InlineKeyboardButton("➡️ Вперед", callback_data=f"change_month_{next_year}_{next_month}"),
+        InlineKeyboardButton("🏠 Главное меню", callback_data="main_menu")
     ])
 
     return InlineKeyboardMarkup(keyboard)
 
-
+async def handle_main_menu(update: Update, context: CallbackContext):
+    """Обработчик кнопки 'Назад' в главное меню"""
+    from main import get_main_menu
+    query = update.callback_query
+    if query:
+        await query.answer()
+        await query.edit_message_text("🏠 Главное меню", reply_markup=get_main_menu())
 
 async def handle_date_selection(update: Update, context: CallbackContext):
     """Обработка выбора даты"""
