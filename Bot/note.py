@@ -125,24 +125,49 @@ async def add_note(update: Update, context: CallbackContext):
         await query.message.reply_text("Ошибка: дата не выбрана.")
         return
 
-    await query.message.reply_text(f"✏️ Напишите заметку для {date}:")
+    # Предлагаем выбрать категорию заметки как кнопки
+    categories = ["Бизнес", "Бытовые", "Личные", "Учёба", "Здоровье"]
+    keyboard = [
+        [InlineKeyboardButton(category, callback_data=f"category_{category}") for category in categories],
+        [InlineKeyboardButton("🔙 Назад", callback_data="notes")]
+    ]
+    await query.edit_message_text(f"📅 Выберите категорию для заметки на {date}:", reply_markup=InlineKeyboardMarkup(keyboard))
+    context.user_data["waiting_for_category"] = True
+
+async def handle_category_selection(update: Update, context: CallbackContext):
+    query = update.callback_query
+    await query.answer()
+
+    category = query.data.split("_")[1]  # Получаем категорию из данных кнопки
+    context.user_data["selected_category"] = category
+
+    await query.edit_message_text(f"✏️ Напишите заметку для категории '{category}':")
     context.user_data["waiting_for_note"] = True
+
 
 async def save_note(update: Update, context: CallbackContext):
     from main import get_main_menu
+
     note = update.message.text
     date = context.user_data.get("selected_date")
+    category = context.user_data.get("selected_category")
     user_id = update.message.from_user.id
 
     if not date:
         await update.message.reply_text("Ошибка: дата не выбрана.")
         return
+    if not category:
+        await update.message.reply_text("Ошибка: категория не выбрана.")
+        return
+
+    # Добавляем заметку с категорией
     if date not in notes:
         notes[date] = []
-    notes[date].append({"user_id": user_id, "note": note})
+    notes[date].append({"user_id": user_id, "category": category, "note": note})
     save_notes()
 
-    await update.message.reply_text(f"✅ Заметка добавлена на {date}!", reply_markup=get_main_menu())
+    await update.message.reply_text(f"✅ Заметка добавлена на {date} в категорию '{category}'!", reply_markup=get_main_menu())
+
 
 async def delete_note(update: Update, context: CallbackContext):
     from main import get_main_menu
@@ -183,7 +208,7 @@ async def view_notes(update: Update, context: CallbackContext):
     if date in notes:
         user_notes = [note for note in notes[date] if note['user_id'] == user_id]
         if user_notes:
-            notes_text = "\n".join([f"{idx+1}. {note['note']}" for idx, note in enumerate(user_notes)])
+            notes_text = "\n".join([f"{idx+1}. [{note['category']}] {note['note']}" for idx, note in enumerate(user_notes)])
             keyboard = [
                 [InlineKeyboardButton(f"❌ Удалить {idx+1}", callback_data=f"delete_{idx+1}") for idx in range(len(user_notes))],
                 [InlineKeyboardButton("🔙 Назад", callback_data="notes")]
@@ -193,3 +218,4 @@ async def view_notes(update: Update, context: CallbackContext):
             await message.reply_text(f"📖 На {date} нет ваших заметок.", reply_markup=get_main_menu())
     else:
         await message.reply_text(f"📖 На {date} нет заметок.", reply_markup=get_main_menu())
+

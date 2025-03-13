@@ -3,7 +3,7 @@ import datetime
 import re
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import Application, CommandHandler, MessageHandler, CallbackQueryHandler, filters, CallbackContext
-from note import send_calendar, generate_calendar, handle_date_selection, change_month, add_note, save_note, delete_note, view_notes, load_notes, save_notes, notes, handle_main_menu
+from note import send_calendar, generate_calendar, handle_date_selection, change_month, add_note, save_note, delete_note, view_notes, load_notes, save_notes, notes, handle_main_menu, handle_category_selection
 from API import API_KEY, WEATHER_API_KEY, MODEL, TELEGRAM_TOKEN, STABILITY_API_KEY, STABILITY_API_URL, client
 from func import passwords, save_passwords, save_diary_entries, diary_entries, personal_diary, add_diary_entry, view_diary_entries, generate_captcha, generate_image
 from func import get_weather, plot_forecast, send_reminder, get_psychologist_response, generate_schedule
@@ -344,6 +344,8 @@ def main():
     application.add_handler(CallbackQueryHandler(handle_main_menu, pattern="^main_menu$"))
     application.add_handler(CallbackQueryHandler(add_diary_entry, pattern="^add_diary_entry$"))
     application.add_handler(CallbackQueryHandler(view_diary_entries, pattern="^view_diary_entries$"))
+    # Обработчик выбора категории
+    application.add_handler(CallbackQueryHandler(handle_category_selection, pattern="^category_"))
 
     # Обработка текстовых сообщений
     application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
