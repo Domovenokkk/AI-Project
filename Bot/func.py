@@ -250,3 +250,4 @@ async def generate_schedule(update: Update, context: CallbackContext):
         "Я вижу, у вас на сегодня такие задачи:\n\n" + "\n".join(user_notes) +
         "\n\nКакой порядок выполнения вам удобен? Укажите время, если это необходимо."
     )
+

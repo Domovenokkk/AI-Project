@@ -1,12 +1,12 @@
 import together
 # API-ключи
-API_KEY = "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"
+API_KEY = "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"
 MODEL = "google/gemini-2.0-flash-001"
 TELEGRAM_TOKEN = "7627101415:AAFZQxMXo6dHlxmee2WeRDCY-WL0lZ4TSb4"
 WEATHER_API_KEY = "e180423e95471aa73e61e52e90ec3f7d"
 
 # API-ключ Stability AI
-STABILITY_API_KEY = 'sk-08QaHikVw1ZEV0TIjTNkSyHApNlUoJO9QNgG32fvImcpdsTf'
+STABILITY_API_KEY = 'sk-Wq7zsBrt1aKJxVQMjC0uXiDodA3vW7dtDQCH2uk8CON053f4'
 
 # Endpoint для генерации изображений
 STABILITY_API_URL = "https://api.stability.ai/v1/generation/stable-diffusion-xl-1024-v1-0/text-to-image"

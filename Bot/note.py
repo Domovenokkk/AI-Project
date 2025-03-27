@@ -1,12 +1,13 @@
-
 import calendar
 import datetime
 import json
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import CallbackContext
-
+import matplotlib.pyplot as plt
+import os
 
 NOTES_FILE = "notes.json"
+COMPLETED_TASKS_FILE = "completed_tasks.json"
 
 def load_notes():
     try:
@@ -20,6 +21,18 @@ def save_notes():
     with open(NOTES_FILE, "w", encoding="utf-8") as file:
         json.dump(notes, file, ensure_ascii=False, indent=4)
 
+def load_completed_tasks():
+    try:
+        with open(COMPLETED_TASKS_FILE, "r") as file:
+            return json.load(file)
+    except (FileNotFoundError, json.JSONDecodeError):
+        return {}
+
+def save_completed_tasks(completed_tasks):
+    with open(COMPLETED_TASKS_FILE, "w") as file:
+        json.dump(completed_tasks, file, indent=4)
+
+completed_tasks = load_completed_tasks()
 notes = load_notes()
 
 async def send_calendar(update: Update, context: CallbackContext, year, month):
@@ -91,11 +104,10 @@ async def handle_date_selection(update: Update, context: CallbackContext):
     keyboard = [
         [InlineKeyboardButton("📝 Добавить заметку", callback_data="add_note")],
         [InlineKeyboardButton("📖 Посмотреть заметки", callback_data="view_notes")],
+        [InlineKeyboardButton("📊 Важные", callback_data="important_tasks")],  # Added button here
         [InlineKeyboardButton("🔙 Назад", callback_data="notes")]
     ]
-    await query.edit_message_text(f"📅 Вы выбрали {date}. Выберите действие:",
-                                  reply_markup=InlineKeyboardMarkup(keyboard))
-
+    await query.edit_message_text(f"📅 Вы выбрали {date}. Выберите действие:", reply_markup=InlineKeyboardMarkup(keyboard))
 
 async def change_month(update: Update, context: CallbackContext):
     query = update.callback_query
@@ -146,9 +158,7 @@ async def handle_category_selection(update: Update, context: CallbackContext):
 
 
 async def save_note(update: Update, context: CallbackContext):
-    from main import get_main_menu
-
-    note = update.message.text
+    note = context.user_data.get("transcribed_note", update.message.text)
     date = context.user_data.get("selected_date")
     category = context.user_data.get("selected_category")
     user_id = update.message.from_user.id
@@ -166,8 +176,10 @@ async def save_note(update: Update, context: CallbackContext):
     notes[date].append({"user_id": user_id, "category": category, "note": note})
     save_notes()
 
-    await update.message.reply_text(f"✅ Заметка добавлена на {date} в категорию '{category}'!", reply_markup=get_main_menu())
+    # Удаляем сохраненный текст голосового сообщения после добавления заметки
+    context.user_data.pop("transcribed_note", None)
 
+    await update.message.reply_text(f"✅ Заметка добавлена на {date} в категорию '{category}'!")
 
 async def delete_note(update: Update, context: CallbackContext):
     from main import get_main_menu
@@ -188,7 +200,6 @@ async def delete_note(update: Update, context: CallbackContext):
             await query.edit_message_text("❌ Ошибка: заметка не найдена.", reply_markup=get_main_menu())
     else:
         await query.edit_message_text("❌ Ошибка: не удалось найти заметку.", reply_markup=get_main_menu())
-
 
 async def view_notes(update: Update, context: CallbackContext):
     from main import get_main_menu
@@ -218,4 +229,59 @@ async def view_notes(update: Update, context: CallbackContext):
             await message.reply_text(f"📖 На {date} нет ваших заметок.", reply_markup=get_main_menu())
     else:
         await message.reply_text(f"📖 На {date} нет заметок.", reply_markup=get_main_menu())
+
+async def handle_important_tasks(update: Update, context: CallbackContext):
+    from main import get_main_menu
+    """Обработка кнопки Важные"""
+    query = update.callback_query
+    await query.answer()
+
+    date = context.user_data.get("selected_date")
+    if not date:
+        await query.edit_message_text("Ошибка: дата не выбрана.")
+        return
+
+    important_tasks = [note for note in notes.get(date, []) if note['category'] in ["Бизнес", "Учёба", "Здоровье"]]
+    if important_tasks:
+        task_list = "\n".join([f"{idx+1}. [{note['category']}] {note['note']}" for idx, note in enumerate(important_tasks)])
+        keyboard = [
+            [InlineKeyboardButton(f"✅ Выполнено {idx+1}", callback_data=f"complete_task_{idx+1}") for idx in range(len(important_tasks))],
+            [InlineKeyboardButton("🔙 Назад", callback_data="notes")]
+        ]
+        await query.edit_message_text(f"📖 Важные задачи на {date}:\n{task_list}", reply_markup=InlineKeyboardMarkup(keyboard))
+    else:
+        await query.edit_message_text(f"📖 На {date} нет важных задач.", reply_markup=get_main_menu())
+
+
+async def complete_task(update: Update, context: CallbackContext):
+    from main import get_main_menu
+    query = update.callback_query
+    await query.answer()
+
+    index = int(query.data.split("_")[2]) - 1
+    date = context.user_data.get("selected_date")
+    user_id = str(query.from_user.id)
+
+    if not date:
+        await query.edit_message_text("Ошибка: дата не выбрана.")
+        return
+
+    important_tasks = [note for note in notes.get(date, []) if note['category'] in ["Бизнес", "Учёба", "Здоровье"]]
+
+    if 0 <= index < len(important_tasks):
+        completed_task = important_tasks[index]
+
+        # Обновляем счетчик выполненных задач
+        if user_id not in completed_tasks:
+            completed_tasks[user_id] = 0
+        completed_tasks[user_id] += 1
+        save_completed_tasks(completed_tasks)
+
+        # Удаляем задачу
+        notes[date].remove(completed_task)
+        save_notes()
+
+        await query.edit_message_text(f"✅ Задача '{completed_task['note']}' выполнена!")
+    else:
+        await query.edit_message_text("❌ Ошибка: задача не найдена.")
 

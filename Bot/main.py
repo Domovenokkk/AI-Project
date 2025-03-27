@@ -1,12 +1,27 @@
 import requests
 import datetime
 import re
+import os
+import json
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import Application, CommandHandler, MessageHandler, CallbackQueryHandler, filters, CallbackContext
+from note import handle_important_tasks, complete_task, load_completed_tasks, save_completed_tasks
 from note import send_calendar, generate_calendar, handle_date_selection, change_month, add_note, save_note, delete_note, view_notes, load_notes, save_notes, notes, handle_main_menu, handle_category_selection
 from API import API_KEY, WEATHER_API_KEY, MODEL, TELEGRAM_TOKEN, STABILITY_API_KEY, STABILITY_API_URL, client
 from func import passwords, save_passwords, save_diary_entries, diary_entries, personal_diary, add_diary_entry, view_diary_entries, generate_captcha, generate_image
 from func import get_weather, plot_forecast, send_reminder, get_psychologist_response, generate_schedule
+import speech_recognition as sr
+from pydub import AudioSegment
+from note import completed_tasks
+import time
+from telegram.ext import ContextTypes
+AudioSegment.ffmpeg = "C:/Users/MAX/Desktop/ffmpeg/ffmpeg-master-latest-win64-gpl-shared/bin/ffmpeg.exe"
+
+API_KEY_ID = "O7TpzThsMpM36eJh"
+API_KEY_SECRET = "VDCPvDGgheOYf0dG"
+LANG = "ru"
+RESULT_TYPE = 1
+headers = {"keyId": API_KEY_ID, "keySecret": API_KEY_SECRET}
 
 # Словарь для хранения истории диалогов пользователей
 conversation_context = {}
@@ -14,13 +29,14 @@ conversation_context = {}
 def get_main_menu():
     keyboard = [
         [InlineKeyboardButton("📅 Заметки", callback_data="notes")],
+        [InlineKeyboardButton("📊 Результаты", callback_data="show_results")],
         [InlineKeyboardButton("❓ Задать вопрос", callback_data="ask_question")],
         [InlineKeyboardButton("🧠 Личный психолог", callback_data="psychologist")],
         [InlineKeyboardButton("📆 Составить расписание", callback_data="schedule")],
         [InlineKeyboardButton("⏰ Установить напоминание", callback_data="set_reminder")],
         [InlineKeyboardButton("🌤 Узнать погоду", callback_data="weather")],
         [InlineKeyboardButton("📖 Личный дневник", callback_data="personal_diary")],
-        [InlineKeyboardButton("🖼 Сгенерировать изображение", callback_data="generate_image")]
+        [InlineKeyboardButton("🖼 Сгенерировать изображение", callback_data="generate_image")],
     ]
     return InlineKeyboardMarkup(keyboard)
 
@@ -92,7 +108,7 @@ def reset_ai_context(context):
 def remove_markdown(text):
     text = re.sub(r"\*\*(.*?)\*\*", r"\1", text)  # Убираем жирный текст
     text = re.sub(r"\*(.*?)\*", r"\1", text)  # Убираем курсив
-    text = re.sub(r"`(.*?)`", r"\1", text)  # Убираем моноширинный текст
+    text = re.sub(r"(.*?)", r"\1", text)  # Убираем моноширинный текст
     text = re.sub(r"_(.*?)_", r"\1", text)  # Убираем подчёркивание
     return text
 
@@ -123,8 +139,151 @@ async def weather_command(update: Update, context: CallbackContext):
     else:
         await update.message.reply_text("Вы уже в процессе получения погоды. Пожалуйста, подождите.")
 
-async def handle_message(update: Update, context: CallbackContext):
-    user_message = update.message.text.strip()
+
+async def show_results(update: Update, context: CallbackContext):
+    query = update.callback_query
+    await query.answer()
+
+    user_id = str(query.from_user.id)
+    count = completed_tasks.get(user_id, 0)
+
+    # Генерация мотивации через ИИ
+    motivation = await generate_motivation(context, count)
+
+    await query.edit_message_text(
+        f"🎯 Ваш прогресс:\nВыполнено важных задач: {count}\n\n{motivation}",
+        reply_markup=get_main_menu()
+    )
+
+
+async def generate_motivation(context: CallbackContext, count: int):
+    try:
+        headers = {
+            "Authorization": f"Bearer {API_KEY}",
+            "Content-Type": "application/json"
+        }
+        data = {
+            "model": MODEL,
+            "messages": [
+                {"role": "system",
+                 "content": "Ты - мотивационный тренер. Сгенерируй короткое вдохновляющее сообщение на русском языке, основываясь на количестве выполненных задач."},
+                {"role": "user",
+                 "content": f"Я выполнил {count} важных задач за все время. Напиши мотивационный ответ длиной до 3 предложений."}
+            ]
+        }
+
+        response = requests.post("https://openrouter.ai/api/v1/chat/completions", headers=headers, json=data)
+        result = response.json()
+        return result['choices'][0]['message']['content'].strip()
+
+    except Exception as e:
+        print(f"Ошибка генерации мотивации: {e}")
+        return "Ты молодец! Продолжай в том же духе! 💪"
+
+# Функция для создания задачи на транскрипцию
+def create_task(file_path):
+    create_data = {
+        "lang": LANG,
+    }
+    files = {}
+    create_url = "https://api.speechflow.io/asr/file/v1/create"
+
+    if file_path.startswith('http'):
+        create_data['remotePath'] = file_path
+        print('Submitting a remote file')
+        response = requests.post(create_url, data=create_data, headers=headers)
+    else:
+        print('Submitting a local file')
+        create_url += "?lang=" + LANG
+        files['file'] = open(file_path, "rb")
+        response = requests.post(create_url, headers=headers, files=files)
+
+    if response.status_code == 200:
+        create_result = response.json()
+        print(create_result)
+        if create_result["code"] == 10000:
+            task_id = create_result["taskId"]
+        else:
+            print("Create error:")
+            print(create_result["msg"])
+            task_id = ""
+    else:
+        print('Create request failed: ', response.status_code)
+        task_id = ""
+    return task_id
+
+
+# Функция для получения результата транскрипции
+def query_task(task_id):
+    query_url = f"https://api.speechflow.io/asr/file/v1/query?taskId={task_id}&resultType={RESULT_TYPE}"
+    print('Querying transcription result')
+
+    while True:
+        response = requests.get(query_url, headers=headers)
+        if response.status_code == 200:
+            query_result = response.json()
+            if query_result["code"] == 11000:
+                print('Transcription result:')
+                print(query_result)
+                return query_result
+            elif query_result["code"] == 11001:
+                print('Waiting...')
+                time.sleep(3)
+                continue
+            else:
+                print("Transcription error:")
+                print(query_result['msg'])
+                return None
+        else:
+            print('Query request failed: ', response.status_code)
+            return None
+
+
+async def handle_voice_message(update: Update, context: CallbackContext):
+    """Обрабатывает голосовое сообщение и транскрибирует его."""
+    voice_file = await context.bot.get_file(update.message.voice.file_id)
+    file_path = f"voice_{update.message.message_id}.ogg"
+    await voice_file.download_to_drive(file_path)
+    print(f"File saved to {file_path}")
+
+    task_id = create_task(file_path)
+    if task_id:
+        result = query_task(task_id)
+        if result:
+            try:
+                transcription_data = json.loads(result.get("result", "{}"))
+                sentences = transcription_data.get("sentences", [])
+                if sentences:
+                    transcription = sentences[0].get("s", "Текст не найден.")
+                else:
+                    transcription = "Текст не найден."
+
+                # Сохраняем текст в context.user_data
+                context.user_data["transcribed_note"] = transcription
+
+                await update.message.reply_text(f"Расшифровка: {transcription}")
+
+                # Передаем транскрибированный текст в обработку
+                await handle_message(update, context, transcription)
+
+            except json.JSONDecodeError:
+                await update.message.reply_text("Ошибка при обработке результата.")
+        else:
+            await update.message.reply_text("Не удалось выполнить расшифровку.")
+    else:
+        await update.message.reply_text("Ошибка при создании задачи для расшифровки.")
+
+    os.remove(file_path)  # Удаляем файл после обработки
+
+# Функция обработки сообщений (текстовых и транскрибированных голосовых)
+async def handle_message(update: Update, context: CallbackContext, user_message: str = None):
+    if user_message is None:  # Если текст не передан явно, берем его из context или update.message.text
+        user_message = context.user_data.get("transcribed_note", update.message.text)
+
+    if not user_message:
+        await update.message.reply_text("❌ Не удалось получить текст сообщения.")
+        return
+
     user_ip = str(update.effective_user.id)
 
     # Команда выхода из диалога с ИИ
@@ -184,6 +343,7 @@ async def handle_message(update: Update, context: CallbackContext):
         del context.user_data["writing_diary"]
         await update.message.reply_text("Запись сохранена!")
 
+    # Проверка и продолжение обработки в других случаях
     if context.user_data.get("waiting_for_reminder_task"):
         context.user_data["waiting_for_reminder_task"] = False
         context.user_data["reminder_task"] = user_message
@@ -191,7 +351,7 @@ async def handle_message(update: Update, context: CallbackContext):
         context.user_data["waiting_for_reminder_time"] = True
         return
 
-    # Обработка напоминаний (ввод времени)
+    # Работа с напоминаниями
     if context.user_data.get("waiting_for_reminder_time"):
         context.user_data["waiting_for_reminder_time"] = False
         try:
@@ -205,13 +365,14 @@ async def handle_message(update: Update, context: CallbackContext):
             await update.message.reply_text(remove_markdown("Пожалуйста, введите корректное число минут."))
         return
 
-    # Работа с заметками
+    # Проверяем, если бот ждет заметку
     if context.user_data.get("waiting_for_note"):
         reset_ai_context(context)
         context.user_data["waiting_for_note"] = False
         await save_note(update, context)
         return
 
+    # Получаем погоду
     if context.user_data.get("waiting_for_city"):
         weather_info, weather_image = get_weather(user_message)
         await update.message.reply_text(weather_info)
@@ -220,6 +381,7 @@ async def handle_message(update: Update, context: CallbackContext):
         context.user_data["waiting_for_city"] = False
         return
 
+    # Генерация изображений
     if context.user_data.get("waiting_for_prompt"):
         prompt = update.message.text
         await update.message.reply_text("Генерация изображения... Пожалуйста, подождите.")
@@ -233,8 +395,7 @@ async def handle_message(update: Update, context: CallbackContext):
             await update.message.reply_text("Не удалось сгенерировать изображение. Попробуйте еще раз.")
 
         context.user_data["waiting_for_prompt"] = False
-        await update.message.reply_text("Что бы вы хотели сделать дальше?",
-                                        reply_markup=get_main_menu())  # Main menu after image
+        await update.message.reply_text("Что бы вы хотели сделать дальше?", reply_markup=get_main_menu())  # Main menu after image
         return
 
     if context.user_data.get("waiting_for_schedule_answers"):
@@ -269,7 +430,6 @@ async def handle_message(update: Update, context: CallbackContext):
         await update.message.reply_text(remove_markdown(f"📅 Ваше расписание на сегодня:\n\n{schedule}"), reply_markup=get_main_menu())
         return
 
-    # Обработка учебных вопросов (оставляем историю, если продолжается диалог)
     if context.user_data.get("waiting_for_question"):
         question_history = context.user_data.get("question_history", [])
         question_history.append({"role": "user", "content": user_message})
@@ -306,7 +466,7 @@ async def handle_message(update: Update, context: CallbackContext):
         await update.message.reply_text(remove_markdown("📝 Задайте ваш вопрос:"))
         return
 
-    # Психолог (сбрасывает историю диалога с ИИ)
+    # Психолог
     if context.user_data.get("waiting_for_psychologist", False):
         reset_ai_context(context)
         bot_reply = get_psychologist_response(user_message, update.message.chat_id)
@@ -316,6 +476,7 @@ async def handle_message(update: Update, context: CallbackContext):
     await update.message.reply_text(remove_markdown("Я не понял ваш запрос. Используйте кнопки."), reply_markup=get_main_menu())
 
 
+# Основная функция
 def main():
     application = Application.builder().token(TELEGRAM_TOKEN).build()
 
@@ -344,11 +505,15 @@ def main():
     application.add_handler(CallbackQueryHandler(handle_main_menu, pattern="^main_menu$"))
     application.add_handler(CallbackQueryHandler(add_diary_entry, pattern="^add_diary_entry$"))
     application.add_handler(CallbackQueryHandler(view_diary_entries, pattern="^view_diary_entries$"))
-    # Обработчик выбора категории
     application.add_handler(CallbackQueryHandler(handle_category_selection, pattern="^category_"))
+    application.add_handler(CallbackQueryHandler(handle_important_tasks, pattern="^important_tasks$"))
+    application.add_handler(CallbackQueryHandler(complete_task, pattern="^complete_task_"))
+    application.add_handler(CallbackQueryHandler(show_results, pattern="^show_results$"))
 
-    # Обработка текстовых сообщений
+    # Обработка текстовых и голосовых сообщений
     application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
+    application.add_handler(MessageHandler(filters.VOICE, handle_voice_message))
+
 
     print("Бот запущен...")
     application.run_polling()
