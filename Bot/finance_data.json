@@ -1,0 +1,26 @@
+{
+  "1901289897": {
+    "current_month": "2025-04",
+    "months": {},
+    "expenses": {
+      "food": 40000.0,
+      "entertainment": 10000.0,
+      "other": 20000.0
+    },
+    "income": {
+      "salary": 50000.0,
+      "extra": 15000.0
+    }
+  },
+  "626954331": {
+    "current_month": "2025-04",
+    "months": {},
+    "expenses": {
+      "entertainment": 1000000.0
+    },
+    "income": {
+      "salary": 80000.0,
+      "extra": 15000.0
+    }
+  }
+}

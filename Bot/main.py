@@ -6,15 +6,21 @@ import json
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import Application, CommandHandler, MessageHandler, CallbackQueryHandler, filters, CallbackContext
 from note import handle_important_tasks, complete_task, load_completed_tasks, save_completed_tasks
-from note import send_calendar, generate_calendar, handle_date_selection, change_month, add_note, save_note, delete_note, view_notes, load_notes, save_notes, notes, handle_main_menu, handle_category_selection
+from note import send_calendar, generate_calendar, handle_date_selection, change_month, add_note, save_note, \
+    delete_note, view_notes, load_notes, save_notes, notes, handle_main_menu, handle_category_selection
 from API import API_KEY, WEATHER_API_KEY, MODEL, TELEGRAM_TOKEN, STABILITY_API_KEY, STABILITY_API_URL, client
-from func import passwords, save_passwords, save_diary_entries, diary_entries, personal_diary, add_diary_entry, view_diary_entries, generate_captcha, generate_image
+from func import passwords, save_passwords, save_diary_entries, diary_entries, personal_diary, add_diary_entry, \
+    view_diary_entries, generate_captcha, generate_image
 from func import get_weather, plot_forecast, send_reminder, get_psychologist_response, generate_schedule
+from news import *
 import speech_recognition as sr
 from pydub import AudioSegment
 from note import completed_tasks
 import time
+from datetime import date, datetime, timedelta
 from telegram.ext import ContextTypes
+from finance import *
+
 AudioSegment.ffmpeg = "C:/Users/MAX/Desktop/ffmpeg/ffmpeg-master-latest-win64-gpl-shared/bin/ffmpeg.exe"
 
 API_KEY_ID = "O7TpzThsMpM36eJh"
@@ -26,23 +32,30 @@ headers = {"keyId": API_KEY_ID, "keySecret": API_KEY_SECRET}
 # Словарь для хранения истории диалогов пользователей
 conversation_context = {}
 
+
 def get_main_menu():
     keyboard = [
-        [InlineKeyboardButton("📅 Заметки", callback_data="notes")],
-        [InlineKeyboardButton("📊 Результаты", callback_data="show_results")],
-        [InlineKeyboardButton("❓ Задать вопрос", callback_data="ask_question")],
-        [InlineKeyboardButton("🧠 Личный психолог", callback_data="psychologist")],
-        [InlineKeyboardButton("📆 Составить расписание", callback_data="schedule")],
-        [InlineKeyboardButton("⏰ Установить напоминание", callback_data="set_reminder")],
-        [InlineKeyboardButton("🌤 Узнать погоду", callback_data="weather")],
-        [InlineKeyboardButton("📖 Личный дневник", callback_data="personal_diary")],
-        [InlineKeyboardButton("🖼 Сгенерировать изображение", callback_data="generate_image")],
+        [InlineKeyboardButton("📅 Заметки", callback_data="notes"),
+         InlineKeyboardButton("📊 Результаты", callback_data="show_results"),
+         InlineKeyboardButton("❓ Вопросы", callback_data="ask_question")],
+        [InlineKeyboardButton("🧠 Психолог", callback_data="psychologist"),
+         InlineKeyboardButton("📆 Расписание", callback_data="schedule"),
+         InlineKeyboardButton("⏰ Напоминания", callback_data="set_reminder")],
+        [InlineKeyboardButton("🌤 Погода", callback_data="weather"),
+         InlineKeyboardButton("📖 Дневник", callback_data="personal_diary"),
+         InlineKeyboardButton("📰 Новости", callback_data="news_menu")],
+        [InlineKeyboardButton("🖼 Генератор изображений", callback_data="generate_image"),
+         InlineKeyboardButton("🎬 Фильмы", callback_data="movies")],
+        [InlineKeyboardButton("📚 Книги", callback_data="books"),
+         InlineKeyboardButton("💰 Финансы", callback_data="finance")]
     ]
     return InlineKeyboardMarkup(keyboard)
+
 
 async def start(update: Update, context: CallbackContext):
     """Приветственное сообщение"""
     await update.message.reply_text("Привет! Выбери действие:", reply_markup=get_main_menu())
+
 
 async def button_click(update: Update, context: CallbackContext):
     query = update.callback_query
@@ -54,7 +67,7 @@ async def button_click(update: Update, context: CallbackContext):
     user_ip = str(update.effective_user.id)
 
     if query.data == "notes":
-        today = datetime.date.today()
+        today = date.today()  # Используем date вместо datetime.date
         await send_calendar(update, context, today.year, today.month)
 
     elif query.data == "ask_question":
@@ -87,6 +100,90 @@ async def button_click(update: Update, context: CallbackContext):
         await query.message.reply_text("Введите текстовое описание для генерации изображения:")
         context.user_data["waiting_for_prompt"] = True
 
+    elif query.data == "movies":
+        await query.message.reply_text(
+            "Введите подробное описание того, что вы хотите посмотреть (жанр, настроение и т. д.):")
+        context.user_data["waiting_for_movies_description"] = True
+
+    elif query.data == "books":
+        await query.message.reply_text("Введите подробное описание книги, которую вы хотите прочитать:")
+        context.user_data["waiting_for_books_description"] = True
+
+    # Обработка кнопки "Финансы"
+    elif query.data == "finance":
+        await finance_menu(update, context)
+    # Остальные кнопки
+    elif query.data == "track_expenses":
+        await track_expenses(update, context)
+    elif query.data == "track_income":
+        await track_income(update, context)
+    elif query.data.startswith("expense_"):
+        await handle_expense_category(update, context)
+    elif query.data.startswith("income_"):
+        await handle_income_category(update, context)
+    elif query.data == "monthly_summary":
+        await monthly_summary(update, context)
+    elif query.data == "saving_tips":
+        await saving_tips(update, context)
+
+async def saving_tips(update: Update, context: CallbackContext):
+    try:
+        # Получаем объект сообщения в зависимости от источника
+        if update.callback_query:
+            query = update.callback_query
+            await query.answer()
+            msg = query.message
+        else:
+            msg = update.message
+
+        # Генерация ответа через API
+        headers = {
+            "Authorization": f"Bearer {API_KEY}",
+            "Content-Type": "application/json"
+        }
+
+        data = {
+            "model": MODEL,
+            "messages": [
+                {
+                    "role": "system",
+                    "content": "Ты — финансовый консультант. Дай 5 практических советов по экономии денег на русском языке. Ответ должен быть структурированным с нумерованным списком."
+                },
+                {
+                    "role": "user",
+                    "content": "Сгенерируй советы по экономии денег"
+                }
+            ],
+            "stream": False
+        }
+
+        response = requests.post("https://openrouter.ai/api/v1/chat/completions", headers=headers, json=data)
+        response_json = response.json()
+
+        if response.status_code == 200:
+            ai_reply = response_json.get("choices", [{}])[0].get("message", {}).get("content",
+                                                                                    "Не удалось получить советы.")
+            await msg.reply_text(ai_reply)
+        else:
+            error_msg = response_json.get("error", {}).get("message", "Неизвестная ошибка API")
+            await msg.reply_text(f"Ошибка API: {error_msg}")
+
+    except Exception as e:
+        error_message = f"Ошибка генерации советов: {str(e)}"
+        print(error_message)
+        if update.callback_query:
+            await update.callback_query.message.reply_text("⚠️ Произошла ошибка, попробуйте позже")
+        elif update.message:
+            await update.message.reply_text("⚠️ Произошла ошибка, попробуйте позже")
+
+    except Exception as e:
+        error_message = f"Ошибка генерации советов: {str(e)}"
+        print(error_message)
+        if update.callback_query:
+            await update.callback_query.message.reply_text("⚠️ Произошла ошибка, попробуйте позже")
+        elif update.message:
+            await update.message.reply_text("⚠️ Произошла ошибка, попробуйте позже")
+
 def split_message(text, max_length=4096):
     parts = []
     while len(text) > max_length:
@@ -98,12 +195,27 @@ def split_message(text, max_length=4096):
     parts.append(text)
     return parts
 
+async def movies_command(update: Update, context: CallbackContext):
+    """Обработчик команды /movies"""
+    await update.message.reply_text(
+        "Введите подробное описание того, что вы хотите посмотреть (жанр, настроение и т. д.):"
+    )
+    context.user_data["waiting_for_movies_description"] = True
+
+async def books_command(update: Update, context: CallbackContext):
+    """Обработчик команды /books"""
+    await update.message.reply_text(
+        "Введите подробное описание книги, которую вы хотите прочитать:"
+    )
+    context.user_data["waiting_for_books_description"] = True
+
 def reset_ai_context(context):
     """Сбрасывает состояния общения с ИИ (психолог, вопросы и т. д.)."""
     context.user_data["waiting_for_psychologist"] = False
     context.user_data["waiting_for_question"] = False
     context.user_data.pop("question_history", None)
     context.user_data.pop("conversation_context", None)
+
 
 def remove_markdown(text):
     text = re.sub(r"\*\*(.*?)\*\*", r"\1", text)  # Убираем жирный текст
@@ -112,13 +224,16 @@ def remove_markdown(text):
     text = re.sub(r"_(.*?)_", r"\1", text)  # Убираем подчёркивание
     return text
 
+
 async def weather_command(update: Update, context: CallbackContext):
     await update.message.reply_text("Введите название города для получения погоды:")
     context.user_data["waiting_for_city"] = True
 
+
 async def image_command(update: Update, context: CallbackContext):
     await update.message.reply_text("Введите текстовое описание для генерации изображения:")
     context.user_data["waiting_for_prompt"] = True
+
 
 async def handle_manual_command(update: Update, context: CallbackContext, command_type: str):
     if command_type == "ask_question":
@@ -128,9 +243,11 @@ async def handle_manual_command(update: Update, context: CallbackContext, comman
         await update.message.reply_text("🧠 Привет! Я твой личный психолог. Напиши, что тебя беспокоит.")
         context.user_data["waiting_for_psychologist"] = True
 
+
 async def handle_reminder_command(update: Update, context: CallbackContext):
     await update.message.reply_text("Введите задачу для напоминания:")
     context.user_data["waiting_for_reminder_task"] = True
+
 
 async def weather_command(update: Update, context: CallbackContext):
     if "waiting_for_city" not in context.user_data:
@@ -179,6 +296,7 @@ async def generate_motivation(context: CallbackContext, count: int):
     except Exception as e:
         print(f"Ошибка генерации мотивации: {e}")
         return "Ты молодец! Продолжай в том же духе! 💪"
+
 
 # Функция для создания задачи на транскрипцию
 def create_task(file_path):
@@ -275,6 +393,59 @@ async def handle_voice_message(update: Update, context: CallbackContext):
 
     os.remove(file_path)  # Удаляем файл после обработки
 
+
+async def get_movie_recommendations(description: str):
+    try:
+        headers = {
+            "Authorization": f"Bearer {API_KEY}",
+            "Content-Type": "application/json"
+        }
+        data = {
+            "model": MODEL,
+            "messages": [
+                {"role": "system", "content": "Ты — помощник, который рекомендует фильмы на основе описания."},
+                {"role": "user",
+                 "content": f"Вот описание фильма, который я ищу: {description}. Дай мне 7-10 вариантов, которые могут мне подойти."}
+            ],
+            "stream": False
+        }
+
+        response = requests.post("https://openrouter.ai/api/v1/chat/completions", headers=headers, json=data)
+        response_json = response.json()
+        movie_recommendations = response_json.get("choices", [{}])[0].get("message", {}).get("content",
+                                                                                             "Не удалось найти подходящие фильмы.")
+
+        return movie_recommendations
+    except Exception as e:
+        return f"Ошибка при получении рекомендаций для фильмов: {e}"
+
+
+async def get_book_recommendations(description: str):
+    try:
+        headers = {
+            "Authorization": f"Bearer {API_KEY}",
+            "Content-Type": "application/json"
+        }
+        data = {
+            "model": MODEL,
+            "messages": [
+                {"role": "system", "content": "Ты — помощник, который рекомендует книги на основе описания."},
+                {"role": "user",
+                 "content": f"Вот описание книги, которую я ищу: {description}. Дай мне 7-10 вариантов, которые могут мне подойти."}
+            ],
+            "stream": False
+        }
+
+        response = requests.post("https://openrouter.ai/api/v1/chat/completions", headers=headers, json=data)
+        response_json = response.json()
+        book_recommendations = response_json.get("choices", [{}])[0].get("message", {}).get("content",
+                                                                                            "Не удалось найти подходящие книги.")
+
+        return book_recommendations
+    except Exception as e:
+        return f"Ошибка при получении рекомендаций для книг: {e}"
+
+
 # Функция обработки сообщений (текстовых и транскрибированных голосовых)
 async def handle_message(update: Update, context: CallbackContext, user_message: str = None):
     if user_message is None:  # Если текст не передан явно, берем его из context или update.message.text
@@ -282,6 +453,13 @@ async def handle_message(update: Update, context: CallbackContext, user_message:
 
     if not user_message:
         await update.message.reply_text("❌ Не удалось получить текст сообщения.")
+        return
+
+    if await handle_finance_input(update, context):
+        return
+
+    if user_message.startswith('/finance'):
+        await finance_menu(update, context)
         return
 
     user_ip = str(update.effective_user.id)
@@ -292,7 +470,8 @@ async def handle_message(update: Update, context: CallbackContext, user_message:
         context.user_data["waiting_for_question"] = False
         context.user_data.pop("question_history", None)
         context.user_data.pop("conversation_context", None)
-        await update.message.reply_text(remove_markdown("🛑 Диалог завершен. Чем еще могу помочь?"), reply_markup=get_main_menu())
+        await update.message.reply_text(remove_markdown("🛑 Диалог завершен. Чем еще могу помочь?"),
+                                        reply_markup=get_main_menu())
         return
 
     # Проверка капчи
@@ -381,6 +560,11 @@ async def handle_message(update: Update, context: CallbackContext, user_message:
         context.user_data["waiting_for_city"] = False
         return
 
+    # Обработка запроса на советы по экономии
+    if user_message.lower() == "советы по экономии":
+        await saving_tips(update, context)
+        return
+
     # Генерация изображений
     if context.user_data.get("waiting_for_prompt"):
         prompt = update.message.text
@@ -395,8 +579,27 @@ async def handle_message(update: Update, context: CallbackContext, user_message:
             await update.message.reply_text("Не удалось сгенерировать изображение. Попробуйте еще раз.")
 
         context.user_data["waiting_for_prompt"] = False
-        await update.message.reply_text("Что бы вы хотели сделать дальше?", reply_markup=get_main_menu())  # Main menu after image
+        await update.message.reply_text("Что бы вы хотели сделать дальше?",
+                                        reply_markup=get_main_menu())  # Main menu after image
         return
+
+        # Обработка описания для фильмов
+    if context.user_data.get("waiting_for_movies_description"):
+        context.user_data["waiting_for_movies_description"] = False
+        await update.message.reply_text("Поиск фильмов... Пожалуйста, подождите.")
+
+        # Генерация запроса для ИИ
+        movie_recommendations = await get_movie_recommendations(user_message)
+        await update.message.reply_text(f"Вот несколько фильмов, которые могут вам подойти:\n{movie_recommendations}")
+
+        # Обработка описания для книг
+    if context.user_data.get("waiting_for_books_description"):
+        context.user_data["waiting_for_books_description"] = False
+        await update.message.reply_text("Поиск книг... Пожалуйста, подождите.")
+
+        # Генерация запроса для ИИ
+        book_recommendations = await get_book_recommendations(user_message)
+        await update.message.reply_text(f"Вот несколько книг, которые могут вам подойти:\n{book_recommendations}")
 
     if context.user_data.get("waiting_for_schedule_answers"):
         reset_ai_context(context)
@@ -427,7 +630,8 @@ async def handle_message(update: Update, context: CallbackContext, user_message:
         except Exception as e:
             schedule = f"Ошибка: {str(e)}"
 
-        await update.message.reply_text(remove_markdown(f"📅 Ваше расписание на сегодня:\n\n{schedule}"), reply_markup=get_main_menu())
+        await update.message.reply_text(remove_markdown(f"📅 Ваше расписание на сегодня:\n\n{schedule}"),
+                                        reply_markup=get_main_menu())
         return
 
     if context.user_data.get("waiting_for_question"):
@@ -445,7 +649,8 @@ async def handle_message(update: Update, context: CallbackContext, user_message:
 
             response = requests.post("https://openrouter.ai/api/v1/chat/completions", headers=headers, json=data)
             response_json = response.json()
-            bot_reply = response_json.get("choices", [{}])[0].get("message", {}).get("content", "Не удалось получить ответ.")
+            bot_reply = response_json.get("choices", [{}])[0].get("message", {}).get("content",
+                                                                                     "Не удалось получить ответ.")
 
             bot_reply = remove_markdown(bot_reply)
             for part in split_message(bot_reply):
@@ -473,47 +678,106 @@ async def handle_message(update: Update, context: CallbackContext, user_message:
         await update.message.reply_text(remove_markdown(bot_reply))
         return
 
-    await update.message.reply_text(remove_markdown("Я не понял ваш запрос. Используйте кнопки."), reply_markup=get_main_menu())
+    await update.message.reply_text(remove_markdown("Что хотите на этот раз?"), reply_markup=get_main_menu())
 
 
-# Основная функция
+async def error_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    print(f"Ошибка: {context.error}")
+    if update.message:
+        await update.message.reply_text("😞 Произошла ошибка, попробуйте позже")
+
+
 def main():
+    # Создаем приложение Telegram бота
     application = Application.builder().token(TELEGRAM_TOKEN).build()
+    application.add_error_handler(error_handler)
 
-    # Обработка команд через /
-    application.add_handler(CommandHandler("start", start))
-    application.add_handler(CommandHandler("notes", lambda u, c: send_calendar(u, c, datetime.date.today().year, datetime.date.today().month)))
-    application.add_handler(CommandHandler("ask_question", lambda u, c: handle_manual_command(u, c, "ask_question")))
-    application.add_handler(CommandHandler("psychologist", lambda u, c: handle_manual_command(u, c, "psychologist")))
-    application.add_handler(CommandHandler("schedule", generate_schedule))
-    application.add_handler(CommandHandler("set_reminder", handle_reminder_command))
-    application.add_handler(CommandHandler("weather", weather_command))
-    application.add_handler(CommandHandler("personal_diary", personal_diary))
-    application.add_handler(CommandHandler("add_diary_entry", add_diary_entry))
-    application.add_handler(CommandHandler("view_diary_entries", view_diary_entries))
-    application.add_handler(CommandHandler("generate_image", image_command))
+    # Регистрируем обработчики команд
+    command_handlers = [
+        CommandHandler("start", start),
+        CommandHandler("notes", lambda u, c: send_calendar(u, c, date.today().year, date.today().month)),
+        CommandHandler("ask_question", lambda u, c: handle_manual_command(u, c, "ask_question")),
+        CommandHandler("psychologist", lambda u, c: handle_manual_command(u, c, "psychologist")),
+        CommandHandler("schedule", generate_schedule),
+        CommandHandler("set_reminder", handle_reminder_command),
+        CommandHandler("weather", weather_command),
+        CommandHandler("personal_diary", personal_diary),
+        CommandHandler("add_diary_entry", add_diary_entry),
+        CommandHandler("view_diary_entries", view_diary_entries),
+        CommandHandler("generate_image", image_command),
+        CommandHandler("finance", finance_menu),
+        CommandHandler("movies", movies_command),
+        CommandHandler("books", books_command)
+    ]
 
-    # Обработка кнопок
-    application.add_handler(CallbackQueryHandler(button_click,
-                                                 pattern="^(notes|ask_question|psychologist|schedule|set_reminder|personal_diary|weather|generate_image)$"))
-    application.add_handler(CallbackQueryHandler(handle_date_selection, pattern="^date_"))
-    application.add_handler(CallbackQueryHandler(change_month, pattern="^change_month_"))
-    application.add_handler(CallbackQueryHandler(add_note, pattern="^add_note$"))
-    application.add_handler(CallbackQueryHandler(view_notes, pattern="^view_notes$"))
-    application.add_handler(CallbackQueryHandler(delete_note, pattern="^delete_"))
-    application.add_handler(CallbackQueryHandler(generate_schedule, pattern="^schedule$"))
-    application.add_handler(CallbackQueryHandler(handle_main_menu, pattern="^main_menu$"))
-    application.add_handler(CallbackQueryHandler(add_diary_entry, pattern="^add_diary_entry$"))
-    application.add_handler(CallbackQueryHandler(view_diary_entries, pattern="^view_diary_entries$"))
-    application.add_handler(CallbackQueryHandler(handle_category_selection, pattern="^category_"))
-    application.add_handler(CallbackQueryHandler(handle_important_tasks, pattern="^important_tasks$"))
-    application.add_handler(CallbackQueryHandler(complete_task, pattern="^complete_task_"))
-    application.add_handler(CallbackQueryHandler(show_results, pattern="^show_results$"))
+    for handler in command_handlers:
+        application.add_handler(handler)
 
-    # Обработка текстовых и голосовых сообщений
-    application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
-    application.add_handler(MessageHandler(filters.VOICE, handle_voice_message))
+    # Регистрируем обработчики callback-запросов
+    callback_handlers = [
+        CallbackQueryHandler(button_click, pattern="^(notes|ask_question|psychologist|schedule|"
+                                                   "set_reminder|personal_diary|weather|"
+                                                   "generate_image|movies|books)$"),
+        CallbackQueryHandler(handle_date_selection, pattern="^date_"),
+        CallbackQueryHandler(change_month, pattern="^change_month_"),
+        CallbackQueryHandler(add_note, pattern="^add_note$"),
+        CallbackQueryHandler(view_notes, pattern="^view_notes$"),
+        CallbackQueryHandler(delete_note, pattern="^delete_"),
+        CallbackQueryHandler(generate_schedule, pattern="^schedule$"),
+        CallbackQueryHandler(handle_main_menu, pattern="^main_menu$"),
+        CallbackQueryHandler(add_diary_entry, pattern="^add_diary_entry$"),
+        CallbackQueryHandler(view_diary_entries, pattern="^view_diary_entries$"),
+        CallbackQueryHandler(handle_category_selection, pattern="^category_"),
+        CallbackQueryHandler(handle_important_tasks, pattern="^important_tasks$"),
+        CallbackQueryHandler(complete_task, pattern="^complete_task_"),
+        CallbackQueryHandler(show_results, pattern="^show_results$"),
+        CallbackQueryHandler(news_menu, pattern="^news_menu$"),
+        CallbackQueryHandler(handle_news_category, pattern="^news_"),
 
+        # Финансовые обработчики
+        CallbackQueryHandler(finance_menu, pattern="^finance$"),
+        CallbackQueryHandler(track_expenses, pattern="^track_expenses$"),
+        CallbackQueryHandler(track_income, pattern="^track_income$"),
+        CallbackQueryHandler(monthly_summary, pattern="^monthly_summary$"),
+        CallbackQueryHandler(saving_tips, pattern="^saving_tips$"),
+        CallbackQueryHandler(
+            handle_expense_category,
+            pattern="^expense_"
+        ),
+        CallbackQueryHandler(
+            handle_income_category,
+            pattern="^income_"
+        )
+    ]
+
+    for handler in callback_handlers:
+        application.add_handler(handler)
+
+    # Обработчики текстовых сообщений с приоритетами
+    text_handlers = [
+        # Высокий приоритет - финансовые операции
+        MessageHandler(
+            filters.TEXT & ~filters.COMMAND,
+            handle_finance_input,
+            block=False
+        ),
+
+        # Низкий приоритет - общий обработчик сообщений
+        MessageHandler(
+            filters.TEXT & ~filters.COMMAND,
+            handle_message
+        ),
+
+        # Обработчик голосовых сообщений
+        MessageHandler(
+            filters.VOICE,
+            handle_voice_message
+        )
+    ]
+
+    # Добавляем обработчики с указанием групп приоритета
+    for i, handler in enumerate(text_handlers, start=1):
+        application.add_handler(handler, group=i)
 
     print("Бот запущен...")
     application.run_polling()
